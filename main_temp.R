@@ -4,13 +4,14 @@ library(quanteda)
 library(topicmodels)
 library(LSX)
 library(stopwords)
+library(readxl)
 library(ggplot2)
 library(showtext)
 showtext_auto()
 
 # Data ----
 # 读取文本数据。
-gm_review <- read.csv("data_raw/gg_review_park_tsukuba.csv") %>% 
+gm_review <- read_xlsx("data_raw/google_review_lihua.xlsx") %>% 
   rename_with(~ tolower(.x)) %>% 
   mutate(rating_count = as.numeric(rating_count)) %>% 
   tibble() %>% 
@@ -25,14 +26,39 @@ gm_review <- read.csv("data_raw/gg_review_park_tsukuba.csv") %>%
     review_time %in% c("1 年前", "2 年前") ~ "2-3 year", 
     review_time %in% c("3 年前", "4 年前", "5 年前") ~ "3-5 year", 
     review_time %in% c("6 年前", "7 年前", "8 年前") ~ "6-8 year"
-  )) %>% 
-  mutate(name = case_when(
-    name == "赤塚富士住建パーク（赤塚公園）" ~ "赤塚公園", 
-    TRUE ~ name
   ))
 
+# 文本分析目标地点：有足够评价数。
+tar_loc <- table(filter(gm_review, !is.na(review))$name) %>% 
+  .[. > 30] %>% 
+  names()
+
+# 文本分析数据。
+gm_review_ta <- gm_review %>% 
+  filter(name %in% tar_loc)
+
+# 数量分析 ----
+# 各地点的评星情况平均数和标准差。
+gm_review_smry <- gm_review %>% 
+  group_by(name) %>% 
+  summarise(
+    smp_n = n(), 
+    rating_mean = mean(rating, na.rm = T), 
+    rating_sd = sd(rating, na.rm = T), 
+    .groups = "drop"
+  )
+gm_review_smry %>% 
+  filter(!is.na(rating_mean)) %>% 
+  arrange(rating_mean) %>% 
+  mutate(name = factor(name, levels = name)) %>% 
+  ggplot() + 
+  geom_col(aes(name, rating_mean, fill = rating_sd)) + 
+  scale_fill_gradient(low = "red", high = "green") + 
+  theme(axis.text.x = element_text(angle = 90))
+
+# 文本分析 ----
 # 构建语料库。
-corp <- corpus(gm_review, text_field = "review")
+corp <- corpus(gm_review_ta, text_field = "review")
 
 # 词典。
 dict <- dictionary(list(
@@ -124,10 +150,10 @@ lss_score %>%
 
 # 主题分析。
 lda_model <- LDA(
-  convert(df_matrix, to = "topicmodels"), k = 2, control = list(seed = 1234)
+  convert(df_matrix, to = "topicmodels"), k = 4, control = list(seed = 1234)
 ) 
 # 每个主题下最重要的 5 个词。
-terms(lda_model, 10)  
+terms(lda_model, 20)  
 
 # 分地点主题分析。
 lda_model_loc <- split(tok, docvars(df_matrix)$name) %>% 
@@ -140,8 +166,8 @@ lapply(lda_model_loc, terms, k = 10)
 
 # 差评主题分析。
 lda_model_loc_neg <- split(
-  tokens_subset(tok, rating <= 3), 
-  docvars(df_matrix)[which(docvars(df_matrix)$rating <= 3), ]$name
+  tokens_subset(tok, rating <= 2), 
+  docvars(df_matrix)[which(docvars(df_matrix)$rating <= 2), ]$name
 ) %>% 
   lapply(., function(x) {
     dfm(x) %>% 
